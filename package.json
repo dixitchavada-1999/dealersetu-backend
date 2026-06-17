@@ -24,6 +24,7 @@
     "bcrypt": "^6.0.0",
     "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
+    "dealersetu-mobile": "file:../dealersetu-app",
     "dotenv": "^17.2.3",
     "expo-image-picker": "^17.0.10",
     "expo-server-sdk": "^5.0.0",
