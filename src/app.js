@@ -102,6 +102,7 @@ app.use('/api/orders', require('./routes/orderRoutes'));
 app.use('/api/dashboard', require('./routes/dashboardRoutes'));
 app.use('/api/upload', require('./routes/uploadRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/super-admin/email-templates', require('./routes/emailTemplateRoutes'));
 app.use('/api/super-admin', require('./routes/superAdminRoutes'));
 app.use('/api/feedback', require('./routes/feedbackRoutes'));
 app.use('/api/banners', require('./routes/bannerRoutes'));

@@ -863,22 +863,12 @@ const forgotPassword = async (req, res, next) => {
         user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 min
         await user.save();
 
-        // Send email
-        const { sendEmail } = require('../utils/sendEmail');
-        await sendEmail({
-            to: user.email,
-            subject: 'Password Reset OTP',
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 20px;">
-                    <h2 style="color: #1e293b;">Password Reset</h2>
-                    <p style="color: #475569;">Your OTP for password reset is:</p>
-                    <div style="background: #f1f5f9; padding: 20px; border-radius: 12px; text-align: center; margin: 20px 0;">
-                        <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #6366f1;">${otp}</span>
-                    </div>
-                    <p style="color: #475569; font-size: 14px;">This OTP expires in 15 minutes.</p>
-                    <p style="color: #94a3b8; font-size: 12px;">If you didn't request this, please ignore this email.</p>
-                </div>
-            `,
+        // Send email via the dynamic template system (key: 'password_reset').
+        // Super-admin can edit this template; falls back to the built-in default.
+        const { sendTemplatedEmail } = require('../utils/sendTemplatedEmail');
+        await sendTemplatedEmail('password_reset', user.email, {
+            otp,
+            name: user.firstName || user.name || 'there',
         });
 
         res.json({ success: true, message: 'If an account exists with that email, a reset link has been sent.' });
@@ -1008,31 +998,22 @@ const createTeamMember = async (req, res, next) => {
             data: {},
         });
 
-        // Fire-and-forget: send activation code via email or SMS
+        // Fire-and-forget: send welcome / activation code via email or SMS.
+        // Uses the dynamic 'customer_welcome' template (super-admin editable).
         try {
             if (email) {
-                const { sendEmail } = require('../utils/sendEmail');
-                sendEmail({
-                    to: email,
-                    subject: `Your Activation Code - ${adminUser.shopName || 'DealerSetu'}`,
-                    html: `
-                        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 20px;">
-                            <h2 style="color: #1e293b;">Welcome to ${adminUser.shopName || 'DealerSetu'}!</h2>
-                            <p style="color: #475569;">Your activation code is:</p>
-                            <div style="background: #f1f5f9; padding: 20px; border-radius: 12px; text-align: center; margin: 20px 0;">
-                                <span style="font-size: 28px; font-weight: bold; letter-spacing: 6px; color: #6366f1;">${loginCode}</span>
-                            </div>
-                            <p style="color: #475569; font-size: 14px;">Use this code to activate your account and set your password.</p>
-                            <p style="color: #94a3b8; font-size: 12px;">If you didn't expect this, please ignore this email.</p>
-                        </div>
-                    `,
-                }).catch(err => console.error('Activation email send error:', err.message));
+                const { sendTemplatedEmail } = require('../utils/sendTemplatedEmail');
+                sendTemplatedEmail('customer_welcome', email, {
+                    name: user.firstName || user.name || 'there',
+                    loginCode,
+                    shopName: adminUser.shopName || 'DealerSetu',
+                }).catch(err => console.error('Welcome email send error:', err.message));
             } else if (mobileNumber) {
                 sendOtpSms(normalizeMobile(mobileNumber), loginCode)
                     .catch(err => console.error('Activation SMS send error:', err.message));
             }
         } catch (sendErr) {
-            console.error('Activation code delivery error:', sendErr.message);
+            console.error('Welcome code delivery error:', sendErr.message);
         }
 
         return;
