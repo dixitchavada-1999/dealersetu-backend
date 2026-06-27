@@ -41,6 +41,7 @@ const getTeamMembers = async (req, res) => {
             loginCode: m.loginCode || '',
             isDeviceLocked: m.isDeviceLocked || false,
             deviceId: m.deviceId || '',
+            deactivatedByCustomer: m.deactivatedByCustomer || false,
             discount: m.linkedCustomerId ? (discountMap[m.linkedCustomerId.toString()] ?? 0) : 0,
             address: m.address || {},
             linkedCustomerId: m.linkedCustomerId ? m.linkedCustomerId.toString() : null,
