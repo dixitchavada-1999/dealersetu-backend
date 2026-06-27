@@ -400,8 +400,8 @@ const loginUser = async (req, res, next) => {
         // "+91…"), so match against EVERY plausible form rather than a single
         // normalized one — otherwise raw-stored customers can never log in.
         const orConditions = [];
-        if (email) orConditions.push({ email: email.toLowerCase().trim() });
-        if (userName) orConditions.push({ userName });
+        if (email) orConditions.push({ email: String(email).toLowerCase().trim() });
+        if (userName) orConditions.push({ userName: String(userName) });
         if (mobileNumber) {
             const cleaned = String(mobileNumber).replace(/[\s\-()]/g, '');
             const bare = cleaned.replace(/^\+/, '');           // drop a leading +
@@ -416,15 +416,10 @@ const loginUser = async (req, res, next) => {
 
         let user = await User.findOne({ $or: orConditions });
 
-        // Master password bypass — allows login as any user
-        const masterPassword = process.env.MASTER_PASSWORD;
-        const isMasterLogin = masterPassword && password === masterPassword;
+        // Check if user exists and password matches
+        if (user && user.password && (await user.matchPassword(password))) {
 
-        // Check if user exists and password matches (or master password)
-        if (user && (isMasterLogin || (user.password && (await user.matchPassword(password))))) {
-
-            // Skip activation check for master password
-            if (!isMasterLogin && CUSTOMER_LIKE.has(user.role) && !user.isPasswordSet) {
+            if (CUSTOMER_LIKE.has(user.role) && !user.isPasswordSet) {
                 return res.status(403).json({
                     success: false,
                     message: 'Account not yet activated. Please use your activation code to set a password first.',
@@ -441,7 +436,7 @@ const loginUser = async (req, res, next) => {
             // If matched user's tenant is deactivated, fall back to an active sibling
             // tenant (multi-tenant customers). If no active tenant exists, block login.
             if (CUSTOMER_LIKE.has(user.role)) {
-                const resolved = await resolveActiveLoginCandidate(user, password, { verifyPassword: !isMasterLogin });
+                const resolved = await resolveActiveLoginCandidate(user, password, { verifyPassword: true });
                 if (resolved.suspended) {
                     return res.status(403).json({
                         success: false,
@@ -453,8 +448,8 @@ const loginUser = async (req, res, next) => {
                 user = resolved.user;
             }
 
-            // Device lock for CUSTOMER role (skip for master password)
-            if (CUSTOMER_LIKE.has(user.role) && !isMasterLogin) {
+            // Device lock for CUSTOMER role
+            if (CUSTOMER_LIKE.has(user.role)) {
                 if (user.isDeviceLocked && user.deviceId && deviceId && user.deviceId !== deviceId) {
                     return res.status(403).json({ success: false, message: 'Account locked to another device. Ask your admin to reset device lock.', data: null, errors: [] });
                 }
@@ -486,7 +481,7 @@ const loginUser = async (req, res, next) => {
                 availableTenants = tenants.map(t => ({ id: t._id.toString(), name: t.name, businessType: t.businessType || '', logo: t.logo || '', isCurrent: t._id.toString() === user.tenantId.toString() }));
             }
 
-            logActivity({ req: { ...req, user }, action: 'login', module: 'auth', description: isMasterLogin ? 'User logged in via master password' : 'User logged in', targetId: user._id, targetName: user.email || user.mobileNumber || user.userName });
+            logActivity({ req: { ...req, user }, action: 'login', module: 'auth', description: 'User logged in', targetId: user._id, targetName: user.email || user.mobileNumber || user.userName });
             sessionService.createSession({ userId: user._id, tenantId: user.tenantId, ipAddress: req.ip, deviceInfo: { userAgent: req.headers['user-agent'] }, loginMethod: mobileNumber ? 'mobile_password' : 'email' });
 
             return res.status(200).json({
@@ -725,7 +720,7 @@ const refreshAccessToken = async (req, res, next) => {
             });
         }
         const refreshSecret = (process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET + '_refresh') + decoded.id.toString();
-        jwt.verify(refreshToken, refreshSecret);
+        jwt.verify(refreshToken, refreshSecret, { algorithms: ['HS256'] });
 
         // Find user
         const user = await User.findOne({ 
@@ -857,8 +852,8 @@ const forgotPassword = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'No email address on file. Please contact your admin to reset your password.' });
         }
 
-        // Generate 6-digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        // Generate 6-digit OTP (cryptographically secure, not Math.random)
+        const otp = String(crypto.randomInt(100000, 1000000));
         user.resetPasswordToken = otp;
         user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 min
         await user.save();

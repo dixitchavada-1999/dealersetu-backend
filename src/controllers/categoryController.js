@@ -141,8 +141,25 @@ const deleteCategory = async (req, res, next) => {
     }
 };
 
+// @desc    Get a single category by id (tenant-scoped)
+// @route   GET /api/categories/:id
+// @access  Private (Admin/User)
+const getCategoryById = async (req, res, next) => {
+    try {
+        const { tenantIds } = await getUserTenantContext(req.user);
+        const category = await Category.findOne({ _id: req.params.id, tenantId: { $in: tenantIds } });
+        if (!category) {
+            return res.status(404).json({ success: false, message: 'Category not found' });
+        }
+        res.json({ success: true, data: category });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getCategories,
+    getCategoryById,
     createCategory,
     updateCategory,
     deleteCategory,

@@ -125,6 +125,18 @@ const userSchema = mongoose.Schema(
     },
     {
         timestamps: true,
+        // Defense-in-depth: never serialize secrets, even if a controller
+        // accidentally sends a raw user document. (Internal property access
+        // like user.password for matchPassword still works.)
+        toJSON: {
+            transform(_doc, ret) {
+                delete ret.password;
+                delete ret.refreshToken;
+                delete ret.resetPasswordToken;
+                delete ret.resetPasswordExpires;
+                return ret;
+            },
+        },
     }
 );
 

@@ -16,7 +16,23 @@ const escapeHtml = (s = '') =>
   String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+// Only allow http(s) image URLs in the logo <img src>; anything else (e.g.
+// a quote-breakout XSS payload) is dropped so it falls back to the text logo.
+const safeUrl = (url = '') => {
+  const u = String(url).trim();
+  return /^https?:\/\/[^\s"'<>]+$/i.test(u) ? u : '';
+};
+
+// Only allow color-ish characters in inline styles, blocking style/attribute
+// breakout (e.g. `red;"><script>`). Falls back to the brand blue otherwise.
+const safeColor = (c) => {
+  const v = String(c || '').trim();
+  return /^#?[0-9a-zA-Z(),.%\s-]{1,40}$/.test(v) ? v : '#0F52BA';
+};
 
 // Replace {{key}} tokens. Missing keys -> '' (kept simple/safe).
 const interpolate = (text = '', data = {}) =>
@@ -40,8 +56,8 @@ const paragraphs = (text, color) => {
 
 function renderEmailTemplate(template, data = {}) {
   const t = template || {};
-  const brand = t.brandColor || '#0F52BA';
-  const logoUrl = t.logoUrl || '';
+  const brand = safeColor(t.brandColor);
+  const logoUrl = safeUrl(t.logoUrl);
 
   const subject = interpolate(t.subject || '', data);
   const heading = interpolate(t.heading || '', data);

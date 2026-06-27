@@ -92,7 +92,14 @@ const previewEmailTemplate = async (req, res) => {
   try {
     const globals = await getGlobalVarsMap();
     const sample = { ...globals, ...PREVIEW_SAMPLE, ...(req.body.sampleData || {}) };
-    const { subject, html } = renderEmailTemplate(req.body, sample);
+    // Reflect the platform logo override so the preview matches the real email.
+    let body = req.body;
+    try {
+      const PlatformSettings = require('../models/platformSettingsModel');
+      const settings = await PlatformSettings.getSettings();
+      if (settings?.logoUrl) body = { ...req.body, logoUrl: settings.logoUrl };
+    } catch { /* ignore */ }
+    const { subject, html } = renderEmailTemplate(body, sample);
     res.json({ success: true, data: { subject, html } });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to render preview' });

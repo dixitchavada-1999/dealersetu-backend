@@ -44,10 +44,9 @@ const errorHandler = (err, req, res, next) => {
         message: err.message || 'An error occurred',
         data: null,
         errors: err.errors || [],
-        ...(process.env.NODE_ENV === 'development' && { 
-            stack: err.stack,
-            fullError: err 
-        }),
+        // Only expose the stack in development; never serialize the full error
+        // object (can leak internal config/paths/values to clients).
+        ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
     });
 };
 

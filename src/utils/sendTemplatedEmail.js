@@ -32,7 +32,18 @@ async function sendTemplatedEmail(key, to, data = {}) {
   const globals = await getGlobalVarsMap();
   const merged = { ...globals, ...data };
 
-  const { subject, html } = renderEmailTemplate(template, merged);
+  // Platform Settings logo (super-admin) overrides the per-template logo when set.
+  let platformLogo = '';
+  try {
+    const PlatformSettings = require('../models/platformSettingsModel');
+    const settings = await PlatformSettings.getSettings();
+    platformLogo = settings?.logoUrl || '';
+  } catch (err) {
+    console.error('sendTemplatedEmail: platform settings lookup failed:', err.message);
+  }
+  const tpl = platformLogo ? { ...template, logoUrl: platformLogo } : template;
+
+  const { subject, html } = renderEmailTemplate(tpl, merged);
   await sendEmail({ to, subject, html });
 }
 

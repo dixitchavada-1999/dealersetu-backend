@@ -36,23 +36,30 @@ const corsOptions = {
 };
 
 // Rate limiting
+// `skip` lets a load test bypass limits (set LOAD_TEST=true). Defaults to OFF,
+// so production behaviour is unchanged unless that env var is explicitly set.
+const skipForLoadTest = () => process.env.LOAD_TEST === 'true';
+
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 20, // 20 attempts per window
     message: { success: false, message: 'Too many attempts. Please try again after 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false,
+    skip: skipForLoadTest,
 });
 
 const apiLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
     max: 100, // 100 requests per minute
     message: { success: false, message: 'Too many requests. Please slow down.' },
+    skip: skipForLoadTest,
 });
 
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(require('./middlewares/sanitizeMongo')); // strip $/. keys → block NoSQL injection
 app.use(cors(corsOptions));
 app.use(helmet());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
@@ -65,6 +72,8 @@ app.use('/api/auth/send-otp', authLimiter);
 app.use('/api/auth/verify-otp', authLimiter);
 app.use('/api/auth/activate-account', authLimiter);
 app.use('/api/auth/refresh-token', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter); // brute-force protection
+app.use('/api/auth/reset-password', authLimiter);  // OTP brute-force protection
 app.use('/api', apiLimiter);
 
 // Serve static files from uploads directory (only in development)
@@ -102,6 +111,7 @@ app.use('/api/orders', require('./routes/orderRoutes'));
 app.use('/api/dashboard', require('./routes/dashboardRoutes'));
 app.use('/api/upload', require('./routes/uploadRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/platform-settings', require('./routes/platformSettingsRoutes'));
 app.use('/api/super-admin/email-templates', require('./routes/emailTemplateRoutes'));
 app.use('/api/super-admin', require('./routes/superAdminRoutes'));
 app.use('/api/feedback', require('./routes/feedbackRoutes'));

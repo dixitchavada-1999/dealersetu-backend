@@ -65,7 +65,7 @@ const log = (n, ok, extra = '') => console.log(`${ok ? '✅' : '❌'} ${n}${extr
   // Gmail +tag → delivers to dixit.chavada1999@gmail.com, avoids duplicate-email clashes
   const cust = await api('POST', '/api/team', {
     firstName: 'Dixit', lastName: 'Welcome',
-    email: 'dixit.chavada1999+welcome@gmail.com',
+    email: `dixit.chavada1999+welcome${ts}@gmail.com`, // unique per run (Gmail +tag → same inbox)
     mobileNumber: `91${String(ts).slice(-8)}`,
     shopName: 'Dixit Traders',
   }, ownerTok);

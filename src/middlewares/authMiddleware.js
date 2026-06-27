@@ -19,9 +19,10 @@ const protect = async (req, res, next) => {
                 throw new Error('Invalid token');
             }
 
-            // Verify with user-specific secret
+            // Verify with user-specific secret (pin algorithm to prevent
+            // algorithm-confusion / "alg:none" attacks)
             const secret = process.env.JWT_SECRET + decoded.id.toString();
-            jwt.verify(token, secret);
+            jwt.verify(token, secret, { algorithms: ['HS256'] });
 
             // Single DB query: load user + populate tenant for isActive +
             // permissionVersion checks. Using .lean() returns a plain JS
