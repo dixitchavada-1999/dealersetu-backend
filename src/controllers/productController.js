@@ -347,6 +347,12 @@ const createProduct = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'Please provide all required fields' });
         }
 
+        // Normalize optional fields: empty strings must become undefined, otherwise
+        // an empty productCode collides on the sparse-unique index (E11000 → 500)
+        // and an empty unit fails the enum. undefined lets sparse/enum-default apply.
+        productCode = (typeof productCode === 'string' ? productCode.trim() : productCode) || undefined;
+        if (!unit) unit = undefined;
+
         // Verify category exists and belongs to tenant
         const category = await Category.findOne({
             _id: categoryId,
@@ -490,7 +496,8 @@ const updateProduct = async (req, res, next) => {
 
         product.name = req.body.name || product.name;
         product.categoryId = req.body.categoryId || product.categoryId;
-        product.productCode = req.body.productCode !== undefined ? req.body.productCode : product.productCode;
+        // Empty string would collide on the sparse-unique index; coerce to undefined.
+        product.productCode = req.body.productCode !== undefined ? ((typeof req.body.productCode === 'string' ? req.body.productCode.trim() : req.body.productCode) || undefined) : product.productCode;
         product.description = req.body.description !== undefined ? req.body.description : product.description;
         product.brand = req.body.brand !== undefined ? req.body.brand : product.brand;
         product.costPrice = req.body.costPrice !== undefined ? Number(req.body.costPrice) : product.costPrice;
