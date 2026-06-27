@@ -44,7 +44,7 @@ async function sendTemplatedEmail(key, to, data = {}) {
   const tpl = platformLogo ? { ...template, logoUrl: platformLogo } : template;
 
   const { subject, html } = renderEmailTemplate(tpl, merged);
-  await sendEmail({ to, subject, html });
+  return sendEmail({ to, subject, html });
 }
 
 module.exports = { sendTemplatedEmail };

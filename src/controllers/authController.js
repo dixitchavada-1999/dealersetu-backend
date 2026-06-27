@@ -7,7 +7,7 @@ const { issueAuthTokens, issueAccessToken } = require('../utils/issueAuthTokens'
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { NOTIFICATION_TYPES } = require('../constants/notificationTypes');
-const { createNotification } = require('../services/notificationService');
+const { createNotification, notifyTenantAdmins } = require('../services/notificationService');
 const { logActivity } = require('../utils/activityLogger');
 const sessionService = require('../services/sessionService');
 const Otp = require('../models/otpModel');
@@ -475,7 +475,7 @@ const loginUser = async (req, res, next) => {
             // Find available tenants for CUSTOMER role (same mobileNumber across tenants)
             let availableTenants = [];
             if (CUSTOMER_LIKE.has(user.role) && user.mobileNumber) {
-                const otherUsers = await User.find({ mobileNumber: user.mobileNumber, role: { $in: CUSTOMER_ROLE_VALUES }, isActive: true, _id: { $ne: user._id } }).select('tenantId');
+                const otherUsers = await User.find({ mobileNumber: user.mobileNumber, role: { $in: CUSTOMER_ROLE_VALUES }, isActive: true, deactivatedByCustomer: { $ne: true }, _id: { $ne: user._id } }).select('tenantId');
                 const allTenantIds = [user.tenantId, ...otherUsers.map(u => u.tenantId)];
                 const tenants = await Tenant.find({ _id: { $in: allTenantIds }, isActive: true }).select('name businessType logo');
                 availableTenants = tenants.map(t => ({ id: t._id.toString(), name: t.name, businessType: t.businessType || '', logo: t.logo || '', isCurrent: t._id.toString() === user.tenantId.toString() }));
@@ -595,6 +595,7 @@ const autoLogin = async (req, res, next) => {
                 mobileNumber: user.mobileNumber,
                 role: { $in: CUSTOMER_ROLE_VALUES },
                 isActive: true,
+                deactivatedByCustomer: { $ne: true },
                 _id: { $ne: user._id },
             }).select('tenantId');
 
@@ -1002,10 +1003,14 @@ const createTeamMember = async (req, res, next) => {
                     name: user.firstName || user.name || 'there',
                     loginCode,
                     shopName: adminUser.shopName || 'DealerSetu',
-                }).catch(err => console.error('Welcome email send error:', err.message));
+                })
+                    .then(info => console.log(`✅ customer_welcome email sent to ${email} -> ${info?.messageId || 'ok'} (accepted: ${JSON.stringify(info?.accepted || [])})`))
+                    .catch(err => console.error(`❌ customer_welcome email FAILED for ${email} — check SMTP_* env vars / Brevo sender verification:`, err.message));
             } else if (mobileNumber) {
                 sendOtpSms(normalizeMobile(mobileNumber), loginCode)
                     .catch(err => console.error('Activation SMS send error:', err.message));
+            } else {
+                console.warn('⚠️ Customer created without email or mobile — activation code not delivered. loginCode:', loginCode);
             }
         } catch (sendErr) {
             console.error('Welcome code delivery error:', sendErr.message);
@@ -1094,6 +1099,7 @@ const loginWithCode = async (req, res, next) => {
                 mobileNumber: user.mobileNumber,
                 role: { $in: CUSTOMER_ROLE_VALUES },
                 isActive: true,
+                deactivatedByCustomer: { $ne: true },
                 _id: { $ne: user._id },
             }).select('tenantId');
 
@@ -1324,6 +1330,7 @@ const switchTenant = async (req, res, next) => {
             mobileNumber: currentUser.mobileNumber,
             role: { $in: CUSTOMER_ROLE_VALUES },
             isActive: true,
+            deactivatedByCustomer: { $ne: true },
         }).select('tenantId');
 
         const allTenantIds = [...new Set(otherUsers.map(u => u.tenantId.toString()))];
@@ -1506,6 +1513,7 @@ const verifyOtp = async (req, res) => {
             mobileNumber: normalized,
             role: { $in: CUSTOMER_ROLE_VALUES },
             isActive: true,
+            deactivatedByCustomer: { $ne: true },
             _id: { $ne: user._id },
         }).select('tenantId');
 
@@ -1607,7 +1615,7 @@ const activateAccount = async (req, res) => {
         // Find available tenants (same mobileNumber across tenants)
         let availableTenants = [];
         if (user.mobileNumber) {
-            const otherUsers = await User.find({ mobileNumber: user.mobileNumber, role: { $in: CUSTOMER_ROLE_VALUES }, isActive: true, _id: { $ne: user._id } }).select('tenantId');
+            const otherUsers = await User.find({ mobileNumber: user.mobileNumber, role: { $in: CUSTOMER_ROLE_VALUES }, isActive: true, deactivatedByCustomer: { $ne: true }, _id: { $ne: user._id } }).select('tenantId');
             const allTenantIds = [user.tenantId, ...otherUsers.map(u => u.tenantId)];
             const tenants = await Tenant.find({ _id: { $in: allTenantIds }, isActive: true }).select('name businessType logo');
             availableTenants = tenants.map(t => ({ id: t._id.toString(), name: t.name, businessType: t.businessType || '', logo: t.logo || '', isCurrent: t._id.toString() === user.tenantId.toString() }));
@@ -1705,6 +1713,213 @@ const updateProfile = async (req, res) => {
     }
 };
 
+// ── Customer multi-owner (business) management ──────────────────────────────
+
+// Build the customer's available businesses (tenants) list, excluding any the
+// customer has deactivated. Mirrors the inline builders used by the auth flows.
+const buildAvailableTenants = async (user) => {
+    if (!CUSTOMER_LIKE.has(user.role) || !user.mobileNumber) return [];
+    const accounts = await User.find({
+        mobileNumber: user.mobileNumber,
+        role: { $in: CUSTOMER_ROLE_VALUES },
+        isActive: true,
+        deactivatedByCustomer: { $ne: true },
+    }).select('tenantId');
+    const currentTid = user.tenantId ? user.tenantId.toString() : null;
+    const allTenantIds = [...new Set([
+        ...(currentTid ? [currentTid] : []),
+        ...accounts.map(u => u.tenantId.toString()),
+    ])];
+    const tenants = await Tenant.find({ _id: { $in: allTenantIds }, isActive: true }).select('name businessType logo');
+    return tenants.map(t => ({
+        id: t._id.toString(),
+        name: t.name,
+        businessType: t.businessType || '',
+        logo: t.logo || '',
+        isCurrent: currentTid ? t._id.toString() === currentTid : false,
+    }));
+};
+
+// @desc    Add another owner/business to a logged-in customer using its activation code
+// @route   POST /api/auth/add-business
+// @access  Private (Customer)
+const addBusiness = async (req, res) => {
+    try {
+        const { loginCode, deviceId } = req.body;
+        if (!loginCode) {
+            return res.status(400).json({ success: false, message: 'Activation code is required', data: null, errors: [] });
+        }
+        if (!CUSTOMER_LIKE.has(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Only customers can add businesses', data: null, errors: [] });
+        }
+
+        // Current user (with password hash, so we can mirror it onto the new account)
+        const currentUser = await User.findById(req.user._id);
+        if (!currentUser || !currentUser.mobileNumber) {
+            return res.status(400).json({ success: false, message: 'Your account has no mobile number on file', data: null, errors: [] });
+        }
+
+        // Find target account by its one-time activation code
+        const target = await User.findOne({ loginCode: loginCode.toUpperCase(), isActive: true });
+        if (!target) {
+            return res.status(404).json({ success: false, message: 'Invalid activation code', data: null, errors: [] });
+        }
+
+        // Must belong to the same person (same mobile number)
+        const sameMobile = normalizeMobile(target.mobileNumber || '') === normalizeMobile(currentUser.mobileNumber || '');
+        if (!sameMobile) {
+            return res.status(403).json({ success: false, message: 'This activation code is registered to a different mobile number.', data: null, errors: [] });
+        }
+
+        if (target.tenantId && currentUser.tenantId && target.tenantId.toString() === currentUser.tenantId.toString()) {
+            return res.status(400).json({ success: false, message: 'This is already your current business.', data: null, errors: [] });
+        }
+
+        // Target tenant must be active
+        const targetTenant = await Tenant.findById(target.tenantId).select('isActive name');
+        if (!targetTenant || !targetTenant.isActive) {
+            return res.status(403).json({ success: false, message: 'This business is currently unavailable.', data: null, errors: [] });
+        }
+
+        // Activate the target account by mirroring the current account's password
+        // hash (so the customer uses one password everywhere). updateOne avoids the
+        // save() pre-hook re-hashing the already-hashed value.
+        await User.updateOne(
+            { _id: target._id },
+            {
+                $set: {
+                    password: currentUser.password,
+                    isPasswordSet: true,
+                    isDeviceLocked: true,
+                    deviceId: deviceId || currentUser.deviceId || target.deviceId,
+                    deactivatedByCustomer: false,
+                    productsHiddenByCustomer: false,
+                },
+                $unset: { loginCode: '' },
+            }
+        );
+
+        const availableTenants = await buildAvailableTenants(currentUser);
+
+        logActivity({ req, action: 'add-business', module: 'auth', description: `Customer added business: ${targetTenant.name}`, targetId: target._id, targetName: targetTenant.name });
+
+        return res.status(200).json({
+            success: true,
+            message: `${targetTenant.name} added to your businesses.`,
+            data: { availableTenants },
+            errors: [],
+        });
+    } catch (error) {
+        console.error('addBusiness error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Failed to add business', data: null, errors: [] });
+    }
+};
+
+// @desc    List all businesses (owners) the customer is registered with, incl. hidden/deactivated
+// @route   GET /api/auth/my-businesses
+// @access  Private (Customer)
+const getMyBusinesses = async (req, res) => {
+    try {
+        if (!CUSTOMER_LIKE.has(req.user.role) || !req.user.mobileNumber) {
+            return res.status(200).json({ success: true, data: [], errors: [] });
+        }
+        const accounts = await User.find({
+            mobileNumber: req.user.mobileNumber,
+            role: { $in: CUSTOMER_ROLE_VALUES },
+            isActive: true,
+        }).select('tenantId productsHiddenByCustomer deactivatedByCustomer');
+
+        const tenantIds = [...new Set(accounts.map(a => a.tenantId.toString()))];
+        const tenants = await Tenant.find({ _id: { $in: tenantIds }, isActive: true }).select('name businessType logo');
+        const tenantMap = {};
+        tenants.forEach(t => { tenantMap[t._id.toString()] = t; });
+
+        const currentTid = req.user.tenantId ? req.user.tenantId.toString() : null;
+        const businesses = accounts
+            .filter(a => tenantMap[a.tenantId.toString()]) // only active tenants
+            .map(a => {
+                const tid = a.tenantId.toString();
+                const t = tenantMap[tid];
+                return {
+                    tenantId: tid,
+                    name: t.name,
+                    businessType: t.businessType || '',
+                    logo: t.logo || '',
+                    isCurrent: tid === currentTid,
+                    productsHidden: !!a.productsHiddenByCustomer,
+                    deactivated: !!a.deactivatedByCustomer,
+                };
+            });
+
+        return res.status(200).json({ success: true, data: businesses, errors: [] });
+    } catch (error) {
+        console.error('getMyBusinesses error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Failed to load businesses', data: null, errors: [] });
+    }
+};
+
+// Resolve the customer's own account row for a given tenant (same mobile number).
+const findCustomerAccountForTenant = (req, tenantId) => User.findOne({
+    mobileNumber: req.user.mobileNumber,
+    tenantId,
+    role: { $in: CUSTOMER_ROLE_VALUES },
+    isActive: true,
+});
+
+// @desc    Hide/show a given owner's products for the customer
+// @route   PUT /api/auth/my-businesses/:tenantId/visibility
+// @access  Private (Customer)
+const setBusinessVisibility = async (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        const { hidden } = req.body;
+        const account = await findCustomerAccountForTenant(req, tenantId);
+        if (!account) {
+            return res.status(404).json({ success: false, message: 'Business not found', data: null, errors: [] });
+        }
+        account.productsHiddenByCustomer = !!hidden;
+        await account.save();
+        return res.status(200).json({ success: true, message: hidden ? 'Products hidden' : 'Products visible', data: { tenantId, productsHidden: !!hidden }, errors: [] });
+    } catch (error) {
+        console.error('setBusinessVisibility error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Failed to update visibility', data: null, errors: [] });
+    }
+};
+
+// @desc    Deactivate/reactivate an owner relationship; notifies the owner on deactivate
+// @route   PUT /api/auth/my-businesses/:tenantId/deactivate
+// @access  Private (Customer)
+const setBusinessDeactivated = async (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        const { deactivated } = req.body;
+        const account = await findCustomerAccountForTenant(req, tenantId);
+        if (!account) {
+            return res.status(404).json({ success: false, message: 'Business not found', data: null, errors: [] });
+        }
+        const turningOn = !!deactivated && !account.deactivatedByCustomer;
+        account.deactivatedByCustomer = !!deactivated;
+        await account.save();
+
+        if (turningOn) {
+            // Notify the owner that this customer deactivated them.
+            const customerName = req.user.name || `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.mobileNumber;
+            notifyTenantAdmins({
+                tenantId,
+                type: NOTIFICATION_TYPES.CUSTOMER_DEACTIVATED,
+                title: 'Customer deactivated your business',
+                message: `${customerName} has deactivated your business in their app.`,
+                data: { customerUserId: account._id.toString(), mobile: req.user.mobileNumber || '' },
+            });
+        }
+
+        return res.status(200).json({ success: true, message: deactivated ? 'Business deactivated' : 'Business reactivated', data: { tenantId, deactivated: !!deactivated }, errors: [] });
+    } catch (error) {
+        console.error('setBusinessDeactivated error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Failed to update business', data: null, errors: [] });
+    }
+};
+
 module.exports = {
     registerAdmin,
     loginUser,
@@ -1725,4 +1940,8 @@ module.exports = {
     verifyOtp,
     activateAccount,
     updateProfile,
+    addBusiness,
+    getMyBusinesses,
+    setBusinessVisibility,
+    setBusinessDeactivated,
 };

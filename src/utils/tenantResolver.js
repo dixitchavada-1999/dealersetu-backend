@@ -58,11 +58,15 @@ const getUserTenantContext = async (user) => {
         };
     }
 
-    // Find all customer accounts with same mobileNumber
+    // Find all customer accounts with same mobileNumber.
+    // Exclude owners the customer has hidden (productsHiddenByCustomer) or
+    // deactivated (deactivatedByCustomer) — their products must not appear.
     const userAccounts = await User.find({
         mobileNumber: user.mobileNumber,
         role: { $in: CUSTOMER_ROLE_VALUES },
         isActive: true,
+        productsHiddenByCustomer: { $ne: true },
+        deactivatedByCustomer: { $ne: true },
     }).select('tenantId linkedCustomerId');
 
     const tenantIds = [...new Set(userAccounts.map(u => u.tenantId.toString()))];

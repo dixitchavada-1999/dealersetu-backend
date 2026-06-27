@@ -15,6 +15,10 @@ const {
     verifyOtp,
     activateAccount,
     updateProfile,
+    addBusiness,
+    getMyBusinesses,
+    setBusinessVisibility,
+    setBusinessDeactivated,
 } = require('../controllers/authController');
 const { protect } = require('../middlewares/authMiddleware');
 
@@ -87,6 +91,26 @@ router.post('/reset-password', resetPassword);
 // @desc    Switch tenant for customer
 // @access  Private
 router.post('/switch-tenant', protect, switchTenant);
+
+// @route   POST /api/auth/add-business
+// @desc    Add another owner/business via activation code (logged-in customer)
+// @access  Private (Customer)
+router.post('/add-business', protect, addBusiness);
+
+// @route   GET /api/auth/my-businesses
+// @desc    List the customer's owners/businesses (incl. hidden/deactivated)
+// @access  Private (Customer)
+router.get('/my-businesses', protect, getMyBusinesses);
+
+// @route   PUT /api/auth/my-businesses/:tenantId/visibility
+// @desc    Hide/show an owner's products for the customer
+// @access  Private (Customer)
+router.put('/my-businesses/:tenantId/visibility', protect, setBusinessVisibility);
+
+// @route   PUT /api/auth/my-businesses/:tenantId/deactivate
+// @desc    Deactivate/reactivate an owner relationship (notifies owner)
+// @access  Private (Customer)
+router.put('/my-businesses/:tenantId/deactivate', protect, setBusinessDeactivated);
 
 // @route   PUT /api/auth/push-token
 // @desc    Register Expo push token

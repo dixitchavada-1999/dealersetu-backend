@@ -106,6 +106,16 @@ const userSchema = mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Customer',
         },
+        // Customer-controlled (per owner/tenant) relationship flags.
+        // Set on the customer's User record for a given tenant.
+        productsHiddenByCustomer: {
+            type: Boolean,
+            default: false,
+        },
+        deactivatedByCustomer: {
+            type: Boolean,
+            default: false,
+        },
         deviceId: {
             type: String,
             trim: true,
