@@ -42,6 +42,7 @@ const getTeamMembers = async (req, res) => {
             isDeviceLocked: m.isDeviceLocked || false,
             deviceId: m.deviceId || '',
             deactivatedByCustomer: m.deactivatedByCustomer || false,
+            unblockRequested: m.unblockRequestedByCustomer || false,
             discount: m.linkedCustomerId ? (discountMap[m.linkedCustomerId.toString()] ?? 0) : 0,
             address: m.address || {},
             linkedCustomerId: m.linkedCustomerId ? m.linkedCustomerId.toString() : null,
@@ -307,6 +308,64 @@ const resetDeviceLock = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: error.message || 'Failed to reset device lock',
+            data: null,
+            errors: [],
+        });
+    }
+};
+
+// @desc    Block / unblock a customer for THIS owner (per-tenant relationship).
+//          Blocking sets isActive=false on the customer's account for this tenant;
+//          the customer can still use their other owners. Unblocking clears any
+//          pending unblock request.
+// @route   PUT /api/team/:id/block
+// @access  Private/Admin
+const setCustomerBlocked = async (req, res) => {
+    try {
+        const { blocked } = req.body;
+        const member = await User.findOne({
+            _id: req.params.id,
+            tenantId: req.user.tenantId,
+            role: { $in: CUSTOMER_ROLE_VALUES },
+        });
+
+        if (!member) {
+            return res.status(404).json({
+                success: false,
+                message: 'Customer not found',
+                data: null,
+                errors: [],
+            });
+        }
+
+        member.isActive = !blocked;
+        // Any pending unblock request is resolved once the owner acts (either way).
+        member.unblockRequestedByCustomer = false;
+        await member.save();
+
+        logActivity({
+            req,
+            action: blocked ? 'block-customer' : 'unblock-customer',
+            module: 'team',
+            description: `${blocked ? 'Blocked' : 'Unblocked'} customer ${member.firstName || ''} ${member.lastName || ''}`.trim(),
+            targetId: member._id,
+            targetName: member.mobileNumber || member.firstName,
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: blocked ? 'Customer blocked' : 'Customer unblocked',
+            data: {
+                id: member._id.toString(),
+                isActive: member.isActive,
+                unblockRequested: false,
+            },
+        });
+    } catch (error) {
+        console.error('Block customer error:', error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to update customer',
             data: null,
             errors: [],
         });
@@ -1394,6 +1453,7 @@ module.exports = {
     deleteTeamMember,
     resetDeviceLock,
     lockDevice,
+    setCustomerBlocked,
     getTenantInfo,
     updateTenantInfo,
     getDispatchUsers,

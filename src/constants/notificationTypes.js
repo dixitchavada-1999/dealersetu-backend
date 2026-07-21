@@ -16,6 +16,7 @@ const NOTIFICATION_TYPES = {
     VISIT_APPROVED: 'visit_approved',
     VISIT_REJECTED: 'visit_rejected',
     CUSTOMER_DEACTIVATED: 'customer_deactivated',
+    CUSTOMER_UNBLOCK_REQUEST: 'customer_unblock_request',
 };
 
 const NOTIFICATION_TYPE_VALUES = Object.values(NOTIFICATION_TYPES);

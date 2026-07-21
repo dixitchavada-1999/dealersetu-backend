@@ -332,21 +332,27 @@ const registerAdmin = async (req, res, next) => {
     }
 };
 
-// Resolve an active login candidate when a matched USER's tenant is deactivated.
-// If the customer has another User account (same mobileNumber) under an active
-// tenant, switch to that one. If no active tenant exists, return { suspended: true }
-// so the caller can block the login with a clear message.
+// Resolve an active login candidate when the matched USER can't be used —
+// either the owner blocked this account (isActive:false) OR its tenant was
+// deactivated by super-admin. A customer may belong to several owners (one User
+// doc per owner, same mobileNumber); as long as ONE owner still has them active,
+// login must succeed. If the customer has another active account under an active
+// tenant, switch to that one. If none remains, return { suspended: true } so the
+// caller can block the login with a clear message.
 const resolveActiveLoginCandidate = async (matchedUser, password, { verifyPassword = true } = {}) => {
     if (!matchedUser || !CUSTOMER_LIKE.has(matchedUser.role) || !matchedUser.tenantId) {
         return { user: matchedUser };
     }
 
     const currentTenant = await Tenant.findById(matchedUser.tenantId).select('isActive');
-    if (currentTenant && currentTenant.isActive) {
+    const tenantActive = !!(currentTenant && currentTenant.isActive);
+    // Matched account is usable only if the owner hasn't blocked it AND its tenant is active.
+    if (matchedUser.isActive && tenantActive) {
         return { user: matchedUser };
     }
 
-    // Current tenant is inactive — search for an active sibling tenant
+    // Matched account is blocked or its tenant is suspended — search for an
+    // active sibling account (another owner) with the same mobile number.
     if (!matchedUser.mobileNumber) {
         return { suspended: true };
     }
@@ -428,24 +434,24 @@ const loginUser = async (req, res, next) => {
                 });
             }
 
-            // Check if user is active
-            if (!user.isActive) {
-                return res.status(403).json({ success: false, message: 'Your account has been deactivated. Please contact administrator.', data: null, errors: [] });
-            }
-
-            // If matched user's tenant is deactivated, fall back to an active sibling
-            // tenant (multi-tenant customers). If no active tenant exists, block login.
+            // Multi-tenant customers: a customer may belong to several owners.
+            // If THIS owner blocked the account (isActive:false) or the tenant was
+            // suspended by super-admin, fall back to any other owner where the
+            // customer is still active. Only block login when NO active owner remains.
             if (CUSTOMER_LIKE.has(user.role)) {
                 const resolved = await resolveActiveLoginCandidate(user, password, { verifyPassword: true });
                 if (resolved.suspended) {
                     return res.status(403).json({
                         success: false,
-                        message: 'Your account has been suspended. Please contact administrator.',
+                        message: 'Your account has been deactivated by all your businesses. Please contact administrator.',
                         data: null,
                         errors: [],
                     });
                 }
                 user = resolved.user;
+            } else if (!user.isActive) {
+                // Non-customer (owner/team member): a blocked account cannot log in.
+                return res.status(403).json({ success: false, message: 'Your account has been deactivated. Please contact administrator.', data: null, errors: [] });
             }
 
             // Device lock for CUSTOMER role
@@ -1823,11 +1829,13 @@ const getMyBusinesses = async (req, res) => {
         if (!CUSTOMER_LIKE.has(req.user.role) || !req.user.mobileNumber) {
             return res.status(200).json({ success: true, data: [], errors: [] });
         }
+        // Include BLOCKED accounts (isActive:false) too, so the customer can see
+        // which owners blocked them and request an unblock. Tenant must still be
+        // active (a super-admin suspended tenant is hidden entirely).
         const accounts = await User.find({
             mobileNumber: req.user.mobileNumber,
             role: { $in: CUSTOMER_ROLE_VALUES },
-            isActive: true,
-        }).select('tenantId productsHiddenByCustomer deactivatedByCustomer');
+        }).select('tenantId isActive productsHiddenByCustomer deactivatedByCustomer unblockRequestedByCustomer');
 
         const tenantIds = [...new Set(accounts.map(a => a.tenantId.toString()))];
         const tenants = await Tenant.find({ _id: { $in: tenantIds }, isActive: true }).select('name businessType logo');
@@ -1840,6 +1848,7 @@ const getMyBusinesses = async (req, res) => {
             .map(a => {
                 const tid = a.tenantId.toString();
                 const t = tenantMap[tid];
+                const blocked = a.isActive === false;
                 return {
                     tenantId: tid,
                     name: t.name,
@@ -1848,6 +1857,8 @@ const getMyBusinesses = async (req, res) => {
                     isCurrent: tid === currentTid,
                     productsHidden: !!a.productsHiddenByCustomer,
                     deactivated: !!a.deactivatedByCustomer,
+                    blocked,
+                    unblockRequested: blocked && !!a.unblockRequestedByCustomer,
                 };
             });
 
@@ -1920,6 +1931,49 @@ const setBusinessDeactivated = async (req, res) => {
     }
 };
 
+// @desc    Customer requests an owner (who blocked them) to unblock their account
+// @route   POST /api/auth/my-businesses/:tenantId/unblock-request
+// @access  Private (Customer)
+const requestUnblock = async (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        // Match the customer's account for this tenant REGARDLESS of isActive —
+        // it's blocked (isActive:false), which findCustomerAccountForTenant excludes.
+        const account = await User.findOne({
+            mobileNumber: req.user.mobileNumber,
+            tenantId,
+            role: { $in: CUSTOMER_ROLE_VALUES },
+        });
+        if (!account) {
+            return res.status(404).json({ success: false, message: 'Business not found', data: null, errors: [] });
+        }
+        if (account.isActive !== false) {
+            return res.status(400).json({ success: false, message: 'This business has not blocked you.', data: null, errors: [] });
+        }
+        if (account.unblockRequestedByCustomer) {
+            return res.status(200).json({ success: true, message: 'Unblock request already sent.', data: { tenantId, unblockRequested: true }, errors: [] });
+        }
+
+        account.unblockRequestedByCustomer = true;
+        await account.save();
+
+        // Notify the owner that this customer asked to be unblocked.
+        const customerName = req.user.name || `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.mobileNumber;
+        notifyTenantAdmins({
+            tenantId,
+            type: NOTIFICATION_TYPES.CUSTOMER_UNBLOCK_REQUEST,
+            title: 'Customer requested unblock',
+            message: `${customerName} has requested you to unblock their account.`,
+            data: { customerUserId: account._id.toString(), mobile: req.user.mobileNumber || '' },
+        });
+
+        return res.status(200).json({ success: true, message: 'Unblock request sent to the business.', data: { tenantId, unblockRequested: true }, errors: [] });
+    } catch (error) {
+        console.error('requestUnblock error:', error);
+        return res.status(500).json({ success: false, message: error.message || 'Failed to send unblock request', data: null, errors: [] });
+    }
+};
+
 module.exports = {
     registerAdmin,
     loginUser,
@@ -1944,4 +1998,5 @@ module.exports = {
     getMyBusinesses,
     setBusinessVisibility,
     setBusinessDeactivated,
+    requestUnblock,
 };

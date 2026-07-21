@@ -116,6 +116,12 @@ const userSchema = mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        // Set when a customer, whose account this owner has blocked (isActive:false),
+        // requests to be unblocked. Cleared when the owner unblocks (or re-blocks).
+        unblockRequestedByCustomer: {
+            type: Boolean,
+            default: false,
+        },
         deviceId: {
             type: String,
             trim: true,

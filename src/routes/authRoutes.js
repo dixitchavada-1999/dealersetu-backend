@@ -19,6 +19,7 @@ const {
     getMyBusinesses,
     setBusinessVisibility,
     setBusinessDeactivated,
+    requestUnblock,
 } = require('../controllers/authController');
 const { protect } = require('../middlewares/authMiddleware');
 
@@ -111,6 +112,11 @@ router.put('/my-businesses/:tenantId/visibility', protect, setBusinessVisibility
 // @desc    Deactivate/reactivate an owner relationship (notifies owner)
 // @access  Private (Customer)
 router.put('/my-businesses/:tenantId/deactivate', protect, setBusinessDeactivated);
+
+// @desc    Request an owner (who blocked the customer) to unblock the account
+// @route   POST /api/auth/my-businesses/:tenantId/unblock-request
+// @access  Private (Customer)
+router.post('/my-businesses/:tenantId/unblock-request', protect, requestUnblock);
 
 // @route   PUT /api/auth/push-token
 // @desc    Register Expo push token

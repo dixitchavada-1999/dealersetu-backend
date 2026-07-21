@@ -9,6 +9,7 @@ const {
     deleteTeamMember,
     resetDeviceLock,
     lockDevice,
+    setCustomerBlocked,
     getTenantInfo,
     updateTenantInfo,
     getDispatchUsers,
@@ -66,5 +67,6 @@ router.put('/:id', protect, requirePermission('team.update'), updateTeamMember);
 router.delete('/:id', protect, requirePermission('team.delete'), deleteTeamMember);
 router.put('/:id/reset-device', protect, requirePermission('team.update'), resetDeviceLock);
 router.put('/:id/lock-device', protect, requirePermission('team.update'), lockDevice);
+router.put('/:id/block', protect, requirePermission('team.update'), setCustomerBlocked);
 
 module.exports = router;
